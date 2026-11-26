@@ -264,7 +264,60 @@ _(liveness vs readiness, graceful shutdown, stateless; kết quả `docker compo
 
 ## Part 6: Final Project — output `check_production_ready.py`
 
-_(dán phần "📋 Checklist Deliverable" khi chạy đầy đủ trong `06-lab-complete/`)_
+Chạy đầy đủ (có Docker) trong WSL2 Ubuntu, tại thư mục `06-lab-complete/`:
+
+```text
+$ python check_production_ready.py
+...
+================================================================
+  📋 Checklist Deliverable
+     ✅ Dockerfile (multi-stage, < 500 MB)
+     ✅ docker-compose.yml (agent + redis)
+     ✅ .dockerignore
+     ✅ Health check endpoint (GET /health)
+     ✅ Readiness endpoint (GET /ready)
+     ✅ API Key authentication
+     ✅ Rate limiting
+     ✅ Cost guard
+     ✅ Config từ environment variables
+     ✅ Structured logging
+     ✅ Graceful shutdown
+     ✅ Public URL ready (Railway / Render config)
+----------------------------------------------------------------
+  Result: 12/12 tiêu chí đạt · 43/43 checks passed
+  🎉 PASS 12/12 — PRODUCTION READY! Deploy nào!
+================================================================
+```
+
+Một số dòng chi tiết trong cùng lần chạy:
+
+```text
+✅ Docker: build image thành công — 72s
+✅ Docker: image < 500 MB — 63 MB
+✅ Khi chạy: vượt giới hạn → 429 — 429 sau 5 request thành công (RATE_LIMIT_PER_MINUTE=5)
+✅ Khi chạy: state nằm trong Redis — restart agent vẫn bị 429
+✅ Khi chạy: Redis mất kết nối → /ready 503 (còn /health vẫn 200)
+✅ Khi chạy: hết budget → 402 — 402 ở request thứ 1
+✅ Khi chạy: mọi dòng log của app là JSON hợp lệ — 17 dòng JSON
+✅ Khi chạy: SIGTERM lúc đang có request → request vẫn 200, process tự thoát — exit code 0
+✅ Docker: `docker stop` tắt êm (exit code 0, < 10s) — exit code 0, 0.9s
+```
+
+**Cách làm từng phần** (code trong `06-lab-complete/`):
+
+| Phần | File | Cách làm |
+|---|---|---|
+| Config | `app/config.py` | Mọi giá trị đọc bằng `os.getenv` có giá trị mặc định. `AGENT_API_KEY` mặc định rỗng, khi rỗng thì mọi request `/ask` đều bị từ chối |
+| API key | `app/auth.py` | `APIKeyHeader(auto_error=False)` để tự trả 401 (không phải 403 hay 422); so sánh key bằng `hmac.compare_digest` |
+| Rate limit | `app/rate_limiter.py` | Sliding window 60 giây bằng Redis sorted set, chạy trong một transaction: ZREMRANGEBYSCORE → ZADD → ZCARD → EXPIRE. Vượt giới hạn thì xoá request vừa thêm, trả 429 kèm `Retry-After`. Key trong Redis là hash của API key |
+| Cost guard | `app/cost_guard.py` | Cộng dồn chi phí (ước lượng khoảng 4 ký tự / token) vào Redis theo ngày và theo tháng bằng `INCRBYFLOAT`. Đạt `DAILY_BUDGET_USD` hoặc `MONTHLY_BUDGET_USD` thì trả 402 |
+| Redis | `app/redis_client.py` | `redis.from_url` không kết nối lúc import nên app vẫn khởi động khi Redis chết; timeout 2 giây để `/ready` trả 503 nhanh |
+| Health / Ready | `app/main.py` | `/health` không phụ thuộc Redis. `/ready` trả 503 khi chưa khởi động xong, đang tắt, hoặc ping Redis lỗi |
+| Logging | `app/main.py` | `JsonFormatter` gom các trường vào một dict rồi `json.dumps` cả dòng; `basicConfig(force=True)` để tránh đúng lỗi đã gặp ở Part 1 |
+| Tắt an toàn | `app/main.py` | `lifespan` dọn dẹp sau `yield`. Handler SIGTERM chỉ ghi log rồi gọi lại handler cũ của uvicorn |
+| Docker | `Dockerfile` | 2 stage: builder tạo venv `/opt/venv`; runtime `python:3.11-slim` chỉ copy venv và code, chạy bằng user `app`, có `HEALTHCHECK`, `CMD` là `exec uvicorn ... --port ${PORT:-8000} --workers 2` để uvicorn là PID 1 |
+
+**Vì sao "402 ở request thứ 1":** cost guard tính tổng chi phí của cả agent trong ngày. Các lần chạy trước trong cùng bài kiểm tra (budget 1000 USD) đã ghi chi phí vào cùng Redis, nên khi budget hạ xuống 0.000001 USD thì tổng đã vượt ngay từ request đầu tiên.
 
 ---
 
@@ -277,3 +330,4 @@ _(dán phần "📋 Checklist Deliverable" khi chạy đầy đủ trong `06-lab
 | 3 | Part 1 | Nhờ tắt server và viết mục Part 1 | AI gửi SIGTERM tắt server, chạy thêm một lần thử SIGTERM ở cổng 8011 để lấy log và exit code, tìm ra lỗi thứ tự logging trong `production/app.py`, viết nháp Part 1 từ output tôi đã chạy | Tự chạy các lệnh curl của 1.2 và 1.3. Đọc lại bản nháp, đối chiếu từng số dòng với code: khớp hết |
 | 4 | Part 1 | Đưa danh sách góp ý cho bản nháp: sửa hàng Input (JSON hỏng trả 500, chưa giới hạn độ dài), hàng Health check (bỏ vế DB ở `/ready`), hàng Shutdown (tách `lifespan` và handler SIGTERM); thêm ý log không phải JSON hợp lệ; chạy test 422/500, `ENVIRONMENT=production` và SIGTERM khi bỏ handler | AI chạy 4 test (A–D) trên máy tôi; test bỏ handler chạy trên bản sao trong thư mục tạm, không sửa code mẫu. AI sửa 3 hàng của bảng 1.3 và ghi chú logging theo góp ý, dán output test vào bài | Xem dòng 5 |
 | 5 | Part 1 | Nhờ AI làm 3 việc kiểm tra: chạy lại test A2 và C rồi so với bài; xem `check_production_ready.py` có thật sự kiểm tra exit code 0 không; chạy `pip show uvicorn` để ghi version | AI chạy lại: A2 vẫn trả 500; C ra 143 khi không có handler và 0 khi có handler, khớp với bài. AI đọc script: mục 2 Runtime không bắt buộc exit code 0 (dòng 756), phần Docker thì bắt buộc (dòng 824), nên sửa lại câu trong hàng Shutdown. `pip show uvicorn` cho 0.30.0, đã ghi vào nhận xét test C | _(Tự mở script ở dòng 756 và 824, thấy Runtime chỉ cần process tự thoát, còn Docker đòi exit code 0.)_ |
+| 6 | Part 6 | Nhờ AI làm hoàn chỉnh bài lab, bắt đầu từ Part 6 | AI viết code cho 12 file của `06-lab-complete/` (6 file trong `app/`, `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.env.example`, `railway.toml`, `render.yaml`); cài thư viện và `redis-server` trong WSL; chạy `check_production_ready.py` bản đầy đủ: PASS 12/12, 43/43 checks | _(TODO: đọc hiểu từng file trong `06-lab-complete/app/` vì Lab Coach có thể hỏi bất kỳ dòng nào; tự chạy lại `python check_production_ready.py`)_ |
