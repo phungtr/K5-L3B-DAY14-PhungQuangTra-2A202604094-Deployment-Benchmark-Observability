@@ -220,17 +220,37 @@ _(sơ đồ các service, service nào được start, giao tiếp với nhau th
 
 ### Exercise 3.1 / 3.2: Deploy agent Part 6
 
-- Nền tảng:
-- URL public:
+- Nền tảng: **Railway**, project `day14-agent` gồm service `agent` (agent Part 6, build từ `06-lab-complete/Dockerfile`) và service `Redis`.
+- URL public: https://agent-production-72a08393.up.railway.app
+- 4 lệnh tự kiểm tra của CP6: `/health` **200**, `/ready` **200**, `/ask` không key **401**, `/ask` có key **200**. Trên URL public, rate limit trả 429 sau 10 request / phút. Chi tiết, biến môi trường và các lệnh deploy: [DEPLOYMENT.md](DEPLOYMENT.md).
 - Ảnh: [dashboard](screenshots/dashboard.png) · [running](screenshots/running.png) · [test](screenshots/test.png)
 
 ### So sánh `railway.toml` và `render.yaml`
 
-_(khác nhau chỗ nào, vì sao)_
+Hai file trong `06-lab-complete/` cùng deploy một agent, nhưng mô tả ở hai mức khác nhau:
+
+| Khía cạnh | `railway.toml` | `render.yaml` |
+|---|---|---|
+| Phạm vi | Chỉ cấu hình build và deploy của **một service**. Project, Redis và biến môi trường tạo bằng CLI hoặc dashboard | Blueprint mô tả **cả hạ tầng**: web service, Key Value (Redis), biến môi trường và liên kết giữa chúng |
+| Build | `builder = "DOCKERFILE"`, `dockerfilePath` | `runtime: docker`, `dockerfilePath`, `dockerContext` (tính từ gốc repo vì file nằm trong thư mục con) |
+| Health check | `healthcheckPath = "/health"`, `healthcheckTimeout` | `healthCheckPath: /health` |
+| Restart | `restartPolicyType = "ON_FAILURE"`, tối đa 3 lần | Render tự restart, file không cấu hình |
+| Redis | Không khai báo trong file: tạo bằng `railway add --database redis`, nối vào agent bằng biến tham chiếu `${{Redis.REDIS_URL}}` | Khai báo service `type: keyvalue`, nối vào agent bằng `fromService` với `property: connectionString` |
+| Secret | Không có trong file, đặt bằng `railway variables` | `sync: false` (nhập ở dashboard khi tạo Blueprint) hoặc `generateValue: true` |
+| Cách deploy | `railway up` upload thư mục ở máy, không cần GitHub | Render đọc Blueprint từ repo GitHub và tự deploy lại khi push |
+
+**Vì sao khác:** Railway thiên về CLI và dashboard. Hạ tầng (service, database, biến) nằm trong project trên Railway, còn file chỉ quyết định cách build và chạy service. Render theo hướng Infrastructure as Code: commit một file là dựng lại được cả stack, nên Redis và secret cũng phải khai báo trong file. Railway CLI 5.75 còn cảnh báo `railway.toml` sẽ ngừng hỗ trợ từ 2026-12-01 để chuyển sang `.railway/railway.ts`, tức Railway cũng đang đi theo hướng IaC. File mẫu ở `03-cloud-deployment/` dùng `builder = "NIXPACKS"` kèm `startCommand`. Bản của mình dùng `DOCKERFILE` vì `CMD` trong Dockerfile đã nghe theo `${PORT:-8000}`, nên agent chạy giống hệt nhau ở local, trong Docker và trên Railway.
 
 ### Exercise 3.3: Pipeline CI/CD trên Cloud Run
 
-_(3–5 dòng mô tả các bước trong `cloudbuild.yaml` và `service.yaml`)_
+`cloudbuild.yaml` mô tả pipeline 4 bước chạy trên Cloud Build mỗi khi push lên `main`; mỗi bước có `waitFor` bước trước, nên test fail là dừng luôn, không build hay deploy:
+
+1. **`test`:** cài requirements và chạy `pytest` trong image `python:3.11-slim`.
+2. **`build`:** build Docker image, gắn 2 tag `$COMMIT_SHA` và `latest`, dùng `--cache-from latest` để tận dụng layer cache.
+3. **`push`:** đẩy cả 2 tag lên Container Registry.
+4. **`deploy`:** `gcloud run deploy` đúng image theo commit SHA lên Cloud Run (region `asia-southeast1`, public, 1–10 instance, 512Mi / 1 CPU). Secret lấy từ Secret Manager bằng `--set-secrets`.
+
+`service.yaml` là định nghĩa Knative của service (IaC): `minScale 1` để tránh cold start, `maxScale 10`, mỗi instance tối đa 80 request đồng thời, liveness probe `/health`, startup probe `/ready`, secret qua `secretKeyRef` thay vì ghi thẳng giá trị.
 
 ---
 
@@ -331,3 +351,4 @@ Một số dòng chi tiết trong cùng lần chạy:
 | 4 | Part 1 | Đưa danh sách góp ý cho bản nháp: sửa hàng Input (JSON hỏng trả 500, chưa giới hạn độ dài), hàng Health check (bỏ vế DB ở `/ready`), hàng Shutdown (tách `lifespan` và handler SIGTERM); thêm ý log không phải JSON hợp lệ; chạy test 422/500, `ENVIRONMENT=production` và SIGTERM khi bỏ handler | AI chạy 4 test (A–D) trên máy tôi; test bỏ handler chạy trên bản sao trong thư mục tạm, không sửa code mẫu. AI sửa 3 hàng của bảng 1.3 và ghi chú logging theo góp ý, dán output test vào bài | Xem dòng 5 |
 | 5 | Part 1 | Nhờ AI làm 3 việc kiểm tra: chạy lại test A2 và C rồi so với bài; xem `check_production_ready.py` có thật sự kiểm tra exit code 0 không; chạy `pip show uvicorn` để ghi version | AI chạy lại: A2 vẫn trả 500; C ra 143 khi không có handler và 0 khi có handler, khớp với bài. AI đọc script: mục 2 Runtime không bắt buộc exit code 0 (dòng 756), phần Docker thì bắt buộc (dòng 824), nên sửa lại câu trong hàng Shutdown. `pip show uvicorn` cho 0.30.0, đã ghi vào nhận xét test C | _(Tự mở script ở dòng 756 và 824, thấy Runtime chỉ cần process tự thoát, còn Docker đòi exit code 0.)_ |
 | 6 | Part 6 | Nhờ AI làm hoàn chỉnh bài lab, bắt đầu từ Part 6 | AI viết code cho 12 file của `06-lab-complete/` (6 file trong `app/`, `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.env.example`, `railway.toml`, `render.yaml`); cài thư viện và `redis-server` trong WSL; chạy `check_production_ready.py` bản đầy đủ: PASS 12/12, 43/43 checks | _(TODO: đọc hiểu từng file trong `06-lab-complete/app/` vì Lab Coach có thể hỏi bất kỳ dòng nào; tự chạy lại `python check_production_ready.py`)_ |
+| 7 | Part 3 | Nhờ AI deploy agent Part 6 lên Railway | AI cài Railway CLI, tạo project `day14-agent` + Redis + service `agent`, đặt biến môi trường (key sinh ngẫu nhiên, không in ra), `railway up`, tạo domain, chạy 4 lệnh tự kiểm tra (200/200/401/200) và thử rate limit trên URL public; viết `DEPLOYMENT.md` và mục Part 3 | Tự đăng nhập Railway (`railway login`). _(TODO: tự chạy 4 lệnh ở `DEPLOYMENT.md`, chụp 3 ảnh deploy)_ |
