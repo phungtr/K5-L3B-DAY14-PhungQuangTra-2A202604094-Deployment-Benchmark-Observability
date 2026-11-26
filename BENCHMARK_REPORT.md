@@ -2,7 +2,7 @@
 
 > Mọi con số lấy từ report JSON trong [`reports/`](reports/), CSV trong [`benchmark-results/`](benchmark-results/) và ảnh trong [`screenshots/`](screenshots/).
 
-**Họ tên:** Phung Quang Tra
+**Họ tên:** Phùng Quang Trà
 **Ngày chạy:** 2026-11-26
 **Môi trường:** Laptop AMD Ryzen 7 8745H (8 nhân / 16 luồng), RAM 20 GB. Windows 11 + WSL2 Ubuntu 24.04 (Python 3.12.3). Docker Desktop 4.55 (Engine 29.1.3, cấp cho Docker 16 CPU / 9.6 GB). Ở phần develop, agent chạy 1 process uvicorn, còn `load_test.py` chạy trên cùng máy.
 
