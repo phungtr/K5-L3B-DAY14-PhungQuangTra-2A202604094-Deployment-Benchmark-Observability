@@ -1,0 +1,44 @@
+# Quality gate (Part 7 — Exercise 7.3)
+# Chạy agent v2 rồi eval trên golden dataset. run_eval.py trả exit code 1 khi accuracy < --min-accuracy
+# hoặc có regression → job FAIL → PR không merge được nếu nhánh main bật
+# "Require status checks to pass before merging" (Settings → Branches → Branch protection rules).
+name: quality-gate
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    paths:
+      - "06-lab-complete/benchmark-observability/develop/**"
+      - ".github/workflows/eval.yml"
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 06-lab-complete/benchmark-observability/develop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Start agent v2
+        run: |
+          AGENT_VERSION=v2 MOCK_ERROR_RATE=0 PORT=8000 nohup python app.py > agent.log 2>&1 &
+          curl -sf --retry 30 --retry-delay 1 --retry-connrefused http://localhost:8000/health
+
+      - name: Eval — quality gate (accuracy >= 85%)
+        run: python eval/run_eval.py --url http://localhost:8000 --min-accuracy 0.85 --out eval_ci.json
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: 06-lab-complete/benchmark-observability/develop/eval_ci.json
