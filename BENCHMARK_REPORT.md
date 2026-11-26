@@ -63,7 +63,9 @@ File: `reports/eval_v1.json`, `reports/eval_v2.json`, `reports/eval_v2_fixed.jso
 | Avg tokens / câu | 57.0 | 109.3 | 115.8 |
 | Tổng cost (USD) | 0.000403 | 0.000764 | 0.000809 |
 | Cost / câu đúng (USD) | 0.00040335 | 0.00003639 | 0.00003518 |
-| Quality gate | FAIL (accuracy ≥ 80%) | PASS (≥ 80%, 0 regression so với v1) | PASS (≥ 100%, 0 regression so với v2) |
+| Quality gate theo ngưỡng CI (accuracy ≥ 85%, không regression) | FAIL (4.35% < 85%) | PASS (91.3%, 0 regression so với v1) | PASS (100%, 0 regression so với v2) |
+
+Ngưỡng 85% là ngưỡng của SLO (mục 1) và của job CI `eval.yml`. Lúc chạy, v1 và v2 dùng ngưỡng mặc định 80% của `run_eval.py` (trường `quality_gate.min_accuracy` trong JSON), còn bản sau khi sửa KB dùng `--min-accuracy 1.0` (lệnh bên dưới). Xét theo 85% thì kết quả PASS / FAIL của cả ba bản không đổi.
 
 **Những câu v2 trả lời sai ban đầu và cách sửa:**
 
@@ -73,6 +75,8 @@ File: `reports/eval_v1.json`, `reports/eval_v2.json`, `reports/eval_v2_fixed.jso
 | scaling-03 | cpu, memory, custom metrics | Thêm tài liệu về Kubernetes HPA, từ khoá kích hoạt `["hpa", "autoscal", "kubernetes"]` |
 
 Hai tài liệu được thêm ở **cuối** `KNOWLEDGE_BASE` trong `develop/utils/mock_llm.py`, với từ khoá riêng. Nhờ vậy, khi các câu khác có số từ khoá khớp bằng nhau thì vẫn chọn tài liệu cũ như trước, và `--baseline reports/eval_v2.json` xác nhận **0 regression**. Bản sửa cũng được chép sang `production/utils/mock_llm.py` để stack Docker dùng cùng knowledge base. Không sửa `golden_dataset.jsonl`.
+
+**Hạn chế:** hai tài liệu được viết dựa đúng vào 2 câu v2 trả lời sai trong golden dataset, nên 100% (23/23) là điểm trên chính bộ câu đã dùng để sửa. Kết quả này dễ bị overfit: nó chưa chứng minh agent trả lời tốt hơn với câu hỏi mới về JWT hay HPA. Muốn đánh giá công bằng thì cần một tập câu hỏi riêng (held-out) không dùng khi sửa KB, hoặc thêm câu mới vào golden dataset rồi chạy lại.
 
 ```text
 $ python eval/run_eval.py --url http://localhost:8002 --min-accuracy 1.0 --baseline reports/eval_v2.json --out reports/eval_v2_fixed.json
@@ -106,9 +110,11 @@ Unit test alert rules: `promtool test rules /p/alert_rules_test.yml` → `SUCCES
 ### 4.1 Screenshot
 
 - [x] [Dashboard Grafana khi đang có tải](screenshots/grafana-dashboard.png): 3 instance, Locust 100 user. Traffic 61.8 req/s, Error rate 0.97%, p95 294.12 ms, in-flight 17, Instances up 3. Panel *Requests/s theo instance* thấy rõ lúc 1 instance chịu khoảng 60 req/s, rồi chuyển sang 3 instance.
+  - Panel *Tokens/s* vẽ dạng **stack** (`"stacking": {"mode": "normal"}` trong `grafana/dashboards/agent-overview.json`): đường vàng `output` được vẽ chồng lên `input`, nên đỉnh của nó (khoảng 7.3K) là **tổng** 4794 + 2527 = 7321 tokens/s, không phải riêng output. Số của từng loại xem câu 3 của Exercise 7.4 bên dưới.
+  - Panel *Cost burn rate* lên khoảng $6/giờ, vượt vạch đỏ $2/giờ, nên `LLMCostBurnRateHigh` cũng **firing** trong lần chạy 100 user này. `/api/v1/alerts` lúc 09:40:10Z (tải đã giảm) vẫn cho thấy alert này firing, `activeAt` 09:28:02Z, giá trị $2.26/giờ. Ngưỡng cố định $2/giờ không phân biệt được traffic tăng hợp lệ với việc mỗi request đắt lên (thí nghiệm C). Nên alert thêm theo cost / request, hoặc theo % budget ngày.
 - [x] [Một trace chậm trong Jaeger](screenshots/jaeger-slow-trace.png): span `chat mock-llm-small` chiếm 1.7 s trong tổng 2.1 s.
 - [x] [Một trace lỗi trong Jaeger](screenshots/jaeger-error-trace.png): `POST /ask` trả 503, span LLM có `error.type = upstream_unavailable` và event `exception` ("Upstream LLM error: 503 Service Unavailable (mock)").
-- [x] [Trang Alerts của Prometheus](screenshots/prometheus-alert-firing.png): nhóm `agent-slo` hiện **FIRING (2)**, gồm `AgentHighErrorRate` và `AgentHighLatencyP95`.
+- [x] [Trang Alerts của Prometheus](screenshots/prometheus-alert-firing.png): nhóm `agent-slo` hiện **FIRING (2)**, gồm `AgentHighErrorRate` và `AgentHighLatencyP95`. Ảnh chụp lúc 09:47:56Z (16:47:56 giờ máy), khoảng 3 phút 54 giây sau T0 của thí nghiệm A + B (mục 4.2) và trước khi bắt đầu C. `AgentHighErrorRate` có *Active Since* 3m 26s, giá trị 0.224 (error rate 22.4%). Nhóm `agent-cost` lúc này INACTIVE.
 
 **Trả lời Exercise 7.4.** Số liệu lấy từ Prometheus lúc 16:36:05, cùng thời điểm chụp ảnh Grafana (3 instance, 100 user):
 
